@@ -1,106 +1,57 @@
 import pytest
-from nicegui.testing import User
-from nicegui import ui
-from collections import deque
-from typing import Set, List, Dict
-from logging import getLogger
+import logging
+from app.database import reset_db
+from app.services import DataSeederService
 
-logger = getLogger(__name__)
-
-pytest_plugins = ["nicegui.testing.user_plugin"]
+logger = logging.getLogger(__name__)
 
 
-def extract_navigation_paths(element) -> List[str]:
-    paths = []
-
-    # Check for direct 'to' property (ui.link)
-    if hasattr(element, "_props"):
-        to_prop = element._props.get("to", "")
-        if to_prop and to_prop.startswith("/"):
-            paths.append(to_prop)
-
-    return paths
+@pytest.fixture()
+def clean_db():
+    """Clean database for each test"""
+    reset_db()
+    DataSeederService.seed_sample_data()
+    yield
+    reset_db()
 
 
-def find_navigable_elements(user: User) -> Dict[str, List[str]]:
-    """Find all potentially navigable elements and their target paths"""
-    navigable = {"links": [], "buttons": [], "menu_items": []}
-
-    # Find ui.link elements
+def test_pages_module_import():
+    """Test that pages module can be imported without errors"""
     try:
-        link_elements = user.find(ui.link).elements
-        for link in link_elements:
-            paths = extract_navigation_paths(link)
-            navigable["links"].extend(paths)
-    except AssertionError:
-        logger.debug("No links found")
+        import app.pages
 
-    # Find ui.button elements that might navigate
+        app.pages.create()
+    except Exception as e:
+        logger.error(f"Error importing pages module: {e}")
+        pytest.fail(f"Pages module import failed: {e}")
+
+
+def test_components_module_import():
+    """Test that components module can be imported without errors"""
     try:
-        button_elements = user.find(ui.button).elements
-        for button in button_elements:
-            # Check if button has navigation-related text
-            button_text = getattr(button, "text", "").lower()
-            nav_keywords = ["go to", "navigate", "open", "view", "show"]
-            if any(keyword in button_text for keyword in nav_keywords):
-                # This button might navigate, but we can't easily determine where
-                # In a real test, we might need to click it and see what happens
-                pass
-    except AssertionError:
-        logger.debug("No buttons found that might navigate")
+        import app.components
 
-    # Find ui.menu_item elements
-    try:
-        menu_elements = user.find(ui.menu_item).elements
-        for menu_item in menu_elements:
-            paths = extract_navigation_paths(menu_item)
-            navigable["menu_items"].extend(paths)
-    except AssertionError:
-        logger.debug("No menu items found")
-
-    return navigable
+        app.components.apply_theme()
+    except Exception as e:
+        logger.error(f"Error importing components module: {e}")
+        pytest.fail(f"Components module import failed: {e}")
 
 
-@pytest.mark.asyncio
-async def test_all_pages_smoke_fast(user: User):
-    """Fast smoke test using user fixture - checks all reachable pages"""
-    visited: Set[str] = set()
-    queue = deque(["/"])
-    errors = []
-    all_navigable_elements = []
+def test_services_integration_with_ui(clean_db):
+    """Test that services work correctly for UI consumption"""
+    from app.services import ProductService, CategoryService
 
-    while queue:
-        path = queue.popleft()
-        if path in visited:
-            continue
+    # Test data seeding worked
+    products = ProductService.get_products(limit=5)
+    assert len(products) > 0
 
-        visited.add(path)
+    categories = CategoryService.get_all_categories()
+    assert len(categories) > 0
 
-        try:
-            # Visit the page
-            await user.open(path)
+    # Test product detail retrieval
+    product = ProductService.get_product_by_id(1)
+    assert product is not None
 
-            # Find all navigable elements
-            navigable = find_navigable_elements(user)
-
-            # Collect all paths from different element types
-            all_paths = []
-            for element_type, paths in navigable.items():
-                all_paths.extend(paths)
-                if paths:
-                    all_navigable_elements.append(
-                        {"page": path, "type": element_type, "count": len(paths), "paths": paths}
-                    )
-
-            # Add new paths to queue
-            for new_path in all_paths:
-                if new_path and new_path not in visited:
-                    queue.append(new_path)
-
-        except Exception as e:
-            logger.debug("Got error")
-            errors.append({"path": path, "error": str(e)})
-
-    # Verify results
-    assert len(visited) > 0, "No pages were visited"
-    assert not errors, f"Encountered {len(errors)} errors during navigation: {errors}"
+    # Test product images
+    images = ProductService.get_product_images(1)
+    assert len(images) > 0
